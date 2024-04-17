@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+set -e
+
+RAILS_ENV=development
+
+if [ -f tmp/pids/server.pid ]; then
+  kill $(cat tmp/pids/server.pid)
+fi
+
+if [ -n "${V}" ]; then
+cat > config/initializers/versioning.rb << EOF
+# encoding: UTF-8
+# frozen_string_literal: true
+# This file is auto-generated from the current state of VCS.
+# Instead of editing this file, please use bin/gendocs.
+module Barong
+  class Application
+    GIT_TAG =    '${V}'
+    GIT_SHA =    '$(git rev-parse --short HEAD)'
+    BUILD_DATE = '$(date --rfc-3339=seconds)'
+    VERSION =    GIT_TAG
+  end
+end
+EOF
+fi
+
+bundle install
+bin/init_config
+bundle exec rake db:drop db:create db:migrate db:seed
+npm i -g swagger-markdown
+npm i -g prettyjson-cli
+bundle exec rails s -d
+while [ ! -f tmp/pids/server.pid ]
+do
+  sleep 1
+done
+sleep 5 # Wait additional time until Rails starts listen port.
+
+curl http://localhost:3000/api/v2/swagger > tmp/user_api_v2_swagger.json
+curl http://localhost:3000/api/v2/management/swagger > tmp/management_api_v2_swagger.json
+curl http://localhost:3000/api/v2/admin/swagger > tmp/admin_api_v2_swagger.json
+
+mkdir -p docs/api/swagger
+
+swagger-markdown -i tmp/user_api_v2_swagger.json -o ./docs/api/barong_user_api_v2.md
+swagger-markdown -i tmp/management_api_v2_swagger.json -o ./docs/api/barong_management_api_v2.md
+swagger-markdown -i tmp/admin_api_v2_swagger.json -o ./docs/api/barong_admin_api_v2.md
+
+ruby -r json -e "puts JSON.pretty_generate(JSON.parse(File.read('tmp/user_api_v2_swagger.json')))" \
+      > docs/api/swagger/user_api.json
+ruby -r json -e "puts JSON.pretty_generate(JSON.parse(File.read('tmp/management_api_v2_swagger.json')))" \
+      > docs/api/swagger/management_api.json
+ruby -r json -e "puts JSON.pretty_generate(JSON.parse(File.read('tmp/admin_api_v2_swagger.json')))" \
+      > docs/api/swagger/admin_api.json
+
+kill $(cat tmp/pids/server.pid)
